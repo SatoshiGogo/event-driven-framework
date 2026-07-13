@@ -1,0 +1,63 @@
+version: 1
+
+run:
+  codes: null
+  start: "20130101"
+  end: null
+  output_dir: event_study_framework/outputs
+  horizons: [1, 3, 5, 10, 20]
+  label_types: [ret]
+  factors: []
+  bootstrap: 2000
+  significance_level: 0.05
+  control_modes: [same_date, same_date_style]
+  style_name: lncap
+  style_bins: 5
+  purge_days: 10
+  residualize_styles: false
+  n_jobs: 1
+  show_progress: true
+  use_gpu: false
+  report_max_rows: 100000
+  cache_dir: event_study_framework/cache
+  use_cache: true
+  refresh_cache: false
+  backtest_fees: [0.0, 0.002]
+  annualization: 252
+  risk_free_rate: 0.0
+
+events:
+  - class: ma_break
+    enabled: true
+    event_name: ma20_break_after_trend
+    params:
+      ma_window: 20
+      trend_window: 60
+      trend_return_threshold: 0.25
+
+  - class: volume_stall
+    enabled: true
+    event_name: volume_stall_near_high
+    params:
+      trend_window: 60
+      trend_return_threshold: 0.25
+      volume_multiple: 1.8
+      near_high_ratio: 0.97
+
+  - class: breakout_volume
+    enabled: true
+    event_name: volume_breakout
+    params:
+      breakout_window: 60
+      volume_multiple: 1.5
+      ma_window: 20
+
+  - class: factor_extreme
+    enabled: false
+    event_name: my_factor_high_ts_pct_0.80
+    params:
+      factor_name: my_factor
+      side: high
+      percentile: 0.8
+      window: 252
+      direction: entry
