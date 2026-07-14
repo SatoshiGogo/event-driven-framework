@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Sequence, Tuple
+from typing import Callable, Dict, Mapping, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -65,7 +65,7 @@ class Event(ABC):
         "volume",
         "amount",
     )
-    required_factors: Optional[Tuple[str, ...]] = None
+    required_factors: Mapping[str, str] = {}
 
     def __init__(
         self,
@@ -119,6 +119,33 @@ class Event(ABC):
 
         return self._meta
 
+    def factor_requirements(self) -> Dict[str, str]:
+        """Return validated ``factor_name -> database/collection`` dependencies."""
+
+        if not isinstance(self.required_factors, Mapping):
+            raise TypeError(
+                f"Event '{self.name}'.required_factors must be a mapping of "
+                "factor names to 'database/collection' paths"
+            )
+        normalized: Dict[str, str] = {}
+        for factor_name, source in self.required_factors.items():
+            if not isinstance(factor_name, str) or not factor_name.strip():
+                raise ValueError(f"Event '{self.name}' contains an invalid factor name")
+            if factor_name != factor_name.strip():
+                raise ValueError(f"Event '{self.name}' factor names must not contain surrounding whitespace")
+            if not isinstance(source, str) or source.count("/") != 1:
+                raise ValueError(
+                    f"Event '{self.name}' factor '{factor_name}' must use "
+                    "'database/collection' as its source"
+                )
+            database, collection = source.split("/", 1)
+            if not database.strip() or not collection.strip() or source != source.strip():
+                raise ValueError(
+                    f"Event '{self.name}' factor '{factor_name}' has an invalid source '{source}'"
+                )
+            normalized[factor_name] = source
+        return normalized
+
     @abstractmethod
     def compute(
         self,
@@ -155,7 +182,7 @@ class EventDefinition(Event):
         cooldown_days: int = 10,
         description: str = "",
         required_fields: Optional[Sequence[str]] = None,
-        required_factors: Optional[Sequence[str]] = None,
+        required_factors: Optional[Mapping[str, str]] = None,
     ) -> None:
         """Initialize a callable event using the legacy constructor signature."""
 
@@ -171,7 +198,7 @@ class EventDefinition(Event):
         if required_fields is not None:
             self.required_fields = tuple(required_fields)
         if required_factors is not None:
-            self.required_factors = tuple(required_factors)
+            self.required_factors = dict(required_factors)
 
     def compute(
         self,

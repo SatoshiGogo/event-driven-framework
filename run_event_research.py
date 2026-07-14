@@ -24,12 +24,7 @@ from event_study_framework.event_config import (
     load_events_from_config,
     load_run_defaults,
 )
-from event_study_framework.events import (
-    breakout_volume_event,
-    factor_extreme_event,
-    ma_break_event,
-    volume_stall_event,
-)
+from event_study_framework.events import BreakoutVolumeEvent, MaBreakEvent, VolumeStallEvent
 from event_study_framework.report import render_event_report
 from event_study_framework.study import (
     EventStudyConfig,
@@ -105,7 +100,6 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         choices=["ret", "mfe", "mae"],
         help="Labels to calculate. ret is required; MFE/MAE are optional and disabled by default.",
     )
-    parser.add_argument("--factor", action="append", default=defaults.get("factors", []), help="Factor spec: name=database/collection.")
     parser.add_argument(
         "--bootstrap",
         type=int,
@@ -197,29 +191,35 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     return parser.parse_args(effective_argv)
 
 
-def parse_factor_specs(specs: List[str]) -> Dict[str, str]:
-    """Parse ``name=database/collection`` factor specifications."""
+def required_factor_sources(events: Sequence[Event]) -> Dict[str, str]:
+    """Merge and validate all factor dependencies declared by selected events."""
 
-    parsed: Dict[str, str] = {}
-    for spec in specs:
-        if "=" not in spec or "/" not in spec:
-            raise ValueError(f"Invalid factor spec: {spec}. Use name=database/collection.")
-        name, path = spec.split("=", 1)
-        parsed[name.strip()] = path.strip()
-    return parsed
+    required: Dict[str, str] = {}
+    owners: Dict[str, str] = {}
+    for event in events:
+        for factor_name, source in event.factor_requirements().items():
+            existing = required.get(factor_name)
+            if existing is not None and existing != source:
+                raise ValueError(
+                    f"Factor '{factor_name}' is declared as both '{existing}' by event "
+                    f"'{owners[factor_name]}' and '{source}' by event '{event.name}'"
+                )
+            required[factor_name] = source
+            owners[factor_name] = event.name
+    return required
 
 
-def load_factors(
+def load_event_factors(
     data_source: MassimMongoDataSource,
-    factor_specs: Dict[str, str],
+    events: Sequence[Event],
     universe: Optional[Iterable[str]],
     start: Optional[str],
     end: Optional[str],
 ) -> Dict[str, pd.DataFrame]:
-    """Load optional factor panels from Mongo."""
+    """Load the deduplicated union of factors declared by selected events."""
 
     factors: Dict[str, pd.DataFrame] = {}
-    for factor_name, path in factor_specs.items():
+    for factor_name, path in required_factor_sources(events).items():
         database, collection = path.split("/", 1)
         factors[factor_name] = data_source.load_factor(
             database=database,
@@ -231,41 +231,21 @@ def load_factors(
     return factors
 
 
-def default_events(factor_names: List[str]) -> List[Event]:
-    """Build a default event library for demonstration and extension."""
+def default_events() -> List[Event]:
+    """Build the default class-based event library."""
 
-    events = [
-        ma_break_event(ma_window=20, trend_window=60, trend_return_threshold=0.25),
-        volume_stall_event(trend_window=60, trend_return_threshold=0.25, volume_multiple=1.8),
-        breakout_volume_event(breakout_window=60, volume_multiple=1.5, ma_window=20),
+    return [
+        MaBreakEvent(ma_window=20, trend_window=60, trend_return_threshold=0.25),
+        VolumeStallEvent(trend_window=60, trend_return_threshold=0.25, volume_multiple=1.8),
+        BreakoutVolumeEvent(breakout_window=60, volume_multiple=1.5, ma_window=20),
     ]
-    for factor_name in factor_names:
-        events.append(
-            factor_extreme_event(
-                factor_name=factor_name,
-                side="high",
-                percentile=0.8,
-                window=252,
-                direction="entry",
-            )
-        )
-        events.append(
-            factor_extreme_event(
-                factor_name=factor_name,
-                side="low",
-                percentile=0.8,
-                window=252,
-                direction="exit",
-            )
-        )
-    return events
 
 
-def select_events(event_config: Optional[Path], factor_names: List[str]) -> List[Event]:
-    """Load only configured events, or preserve the legacy default library."""
+def select_events(event_config: Optional[Path]) -> List[Event]:
+    """Load configured event classes or instantiate the default class library."""
 
     if event_config is None:
-        return default_events(factor_names)
+        return default_events()
     return load_events_from_config(event_config)
 
 
@@ -422,9 +402,8 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    factor_specs = parse_factor_specs(args.factor)
     try:
-        event_definitions = select_events(args.event_config, list(factor_specs.keys()))
+        event_definitions = select_events(args.event_config)
     except EventConfigError as exc:
         raise SystemExit(f"Invalid event configuration: {exc}") from exc
     market_fields = required_market_collections(event_definitions)
@@ -443,13 +422,18 @@ def main() -> None:
         print(f"Event config: {args.event_config.resolve()}")
     print(f"Events: {', '.join(event.name for event in event_definitions)}")
     print(f"Market fields: {', '.join(market_fields)}")
+    factor_sources = required_factor_sources(event_definitions)
+    print(
+        "Event factors: "
+        + (", ".join(f"{name}={source}" for name, source in factor_sources.items()) if factor_sources else "-")
+    )
     panel = data_source.load_market_panel(
         universe,
         start_date=args.start,
         end_date=args.end,
         fields=market_fields,
     )
-    factors = load_factors(data_source, factor_specs, universe, args.start, args.end)
+    factors = load_event_factors(data_source, event_definitions, universe, args.start, args.end)
     style_controls = data_source.load_style_controls(universe, args.start, args.end, include_lncap=True)
     study_config = build_study_config(args)
     result, cache_hits, cache_misses = run_incremental_event_study(

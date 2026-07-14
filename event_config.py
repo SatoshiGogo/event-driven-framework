@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 import math
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Set, Type, Union
 
@@ -12,12 +14,7 @@ import yaml
 
 from event_study_framework.data import MarketPanel
 from event_study_framework.event import Event, validate_event_name
-from event_study_framework.events import (
-    BreakoutVolumeEvent,
-    FactorExtremeEvent,
-    MaBreakEvent,
-    VolumeStallEvent,
-)
+from event_study_framework import events as builtin_events
 
 
 CONFIG_VERSION = 1
@@ -28,7 +25,6 @@ RUN_CONFIG_KEYS = {
     "output_dir",
     "horizons",
     "label_types",
-    "factors",
     "bootstrap",
     "significance_level",
     "control_modes",
@@ -47,12 +43,39 @@ RUN_CONFIG_KEYS = {
     "annualization",
     "risk_free_rate",
 }
-BUILTIN_EVENT_CLASSES: Mapping[str, Type[Event]] = {
-    "ma_break": MaBreakEvent,
-    "volume_stall": VolumeStallEvent,
-    "breakout_volume": BreakoutVolumeEvent,
-    "factor_extreme": FactorExtremeEvent,
-}
+
+
+def _event_class_alias(event_class: Type[Event]) -> str:
+    """Convert ``BreakoutVolumeEvent`` into the YAML alias ``breakout_volume``."""
+
+    class_name = event_class.__name__
+    stem = class_name[:-5] if class_name.endswith("Event") else class_name
+    first_pass = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", stem)
+    return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", first_pass).lower()
+
+
+def discover_builtin_event_classes() -> Dict[str, Type[Event]]:
+    """Discover concrete ``Event`` subclasses defined directly in ``events.py``."""
+
+    discovered: Dict[str, Type[Event]] = {}
+    for _, event_class in inspect.getmembers(builtin_events, inspect.isclass):
+        if (
+            event_class is Event
+            or event_class.__module__ != builtin_events.__name__
+            or not issubclass(event_class, Event)
+            or inspect.isabstract(event_class)
+        ):
+            continue
+        aliases = (event_class.__name__, _event_class_alias(event_class))
+        for alias in aliases:
+            existing = discovered.get(alias)
+            if existing is not None and existing is not event_class:
+                raise RuntimeError(f"duplicate built-in event alias '{alias}'")
+            discovered[alias] = event_class
+    return discovered
+
+
+BUILTIN_EVENT_CLASSES: Mapping[str, Type[Event]] = discover_builtin_event_classes()
 
 
 class EventConfigError(ValueError):
@@ -73,7 +96,7 @@ class _RenamedEvent(Event):
         )
         self.source = source
         self.required_fields = source.required_fields
-        self.required_factors = source.required_factors
+        self.required_factors = dict(source.required_factors)
 
     def compute(
         self,
@@ -306,7 +329,7 @@ def load_run_defaults(path: Union[str, Path]) -> Dict[str, Any]:
 def _validate_run_defaults(defaults: Mapping[str, Any]) -> None:
     """Validate YAML run-default value types and constrained choices."""
 
-    list_keys = {"codes", "horizons", "label_types", "factors", "control_modes", "backtest_fees"}
+    list_keys = {"codes", "horizons", "label_types", "control_modes", "backtest_fees"}
     for key in list_keys:
         value = defaults.get(key)
         if value is not None and not isinstance(value, list):
@@ -359,6 +382,7 @@ __all__ = [
     "CONFIG_VERSION",
     "EventConfigError",
     "RUN_CONFIG_KEYS",
+    "discover_builtin_event_classes",
     "load_event_config",
     "load_events_from_config",
     "load_run_defaults",

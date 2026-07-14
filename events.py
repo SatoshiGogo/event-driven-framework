@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from event_study_framework.data import MarketPanel
-from event_study_framework.event import Event, EventDefinition, EventFunction
+from event_study_framework.event import Event
 
 
 def _positive_int(value: int, parameter_name: str) -> int:
@@ -73,7 +73,7 @@ class MaBreakEvent(Event):
     """Moving-average breakdown after a strong prior trend."""
 
     required_fields = ("close",)
-    required_factors = ()
+    required_factors = {}
 
     def __init__(
         self,
@@ -120,7 +120,7 @@ class VolumeStallEvent(Event):
     """High-volume price stall close to a recent high."""
 
     required_fields = ("close", "high", "volume")
-    required_factors = ()
+    required_factors = {}
 
     def __init__(
         self,
@@ -178,7 +178,7 @@ class BreakoutVolumeEvent(Event):
     """Volume-confirmed breakout above a recent closing high."""
 
     required_fields = ("close", "volume")
-    required_factors = ()
+    required_factors = {}
 
     def __init__(
         self,
@@ -229,6 +229,7 @@ class FactorExtremeEvent(Event):
     def __init__(
         self,
         factor_name: str,
+        factor_source: str,
         side: str = "high",
         percentile: float = 0.8,
         window: int = 252,
@@ -246,8 +247,10 @@ class FactorExtremeEvent(Event):
         numeric_percentile = float(percentile)
         if not np.isfinite(numeric_percentile) or not 0.0 < numeric_percentile < 1.0:
             raise ValueError("percentile must be strictly between 0 and 1")
+        if not isinstance(factor_source, str) or factor_source.count("/") != 1:
+            raise ValueError("factor_source must use 'database/collection' format")
         self.factor_name = factor_name
-        self.required_factors = (factor_name,)
+        self.required_factors = {factor_name: factor_source}
         self.side = side
         self.percentile = numeric_percentile
         self.window = _positive_int(window, "window")
@@ -275,104 +278,13 @@ class FactorExtremeEvent(Event):
             return score >= self.percentile
         return score <= 1.0 - self.percentile
 
-
-def _to_event_definition(event: Event) -> EventDefinition:
-    """Wrap a class-based event in the legacy callable event container."""
-
-    return EventDefinition(
-        name=event.name,
-        func=event.compute,
-        direction=event.direction,
-        cooldown_days=event.cooldown_days,
-        description=event.description,
-        required_fields=event.required_fields,
-        required_factors=event.required_factors,
-    )
-
-
-def ma_break_event(
-    ma_window: int = 20,
-    trend_window: int = 60,
-    trend_return_threshold: float = 0.25,
-) -> EventDefinition:
-    """Create a backward-compatible moving-average breakdown event."""
-
-    return _to_event_definition(
-        MaBreakEvent(
-            ma_window=ma_window,
-            trend_window=trend_window,
-            trend_return_threshold=trend_return_threshold,
-        )
-    )
-
-
-def volume_stall_event(
-    trend_window: int = 60,
-    trend_return_threshold: float = 0.25,
-    volume_multiple: float = 1.8,
-    near_high_ratio: float = 0.97,
-) -> EventDefinition:
-    """Create a backward-compatible high-level volume-stall event."""
-
-    return _to_event_definition(
-        VolumeStallEvent(
-            trend_window=trend_window,
-            trend_return_threshold=trend_return_threshold,
-            volume_multiple=volume_multiple,
-            near_high_ratio=near_high_ratio,
-        )
-    )
-
-
-def breakout_volume_event(
-    breakout_window: int = 60,
-    volume_multiple: float = 1.5,
-    ma_window: int = 20,
-) -> EventDefinition:
-    """Create a backward-compatible volume-confirmed breakout event."""
-
-    return _to_event_definition(
-        BreakoutVolumeEvent(
-            breakout_window=breakout_window,
-            volume_multiple=volume_multiple,
-            ma_window=ma_window,
-        )
-    )
-
-
-def factor_extreme_event(
-    factor_name: str,
-    side: str = "high",
-    percentile: float = 0.8,
-    window: int = 252,
-    direction: str = "entry",
-) -> EventDefinition:
-    """Create a backward-compatible factor-percentile extreme event."""
-
-    return _to_event_definition(
-        FactorExtremeEvent(
-            factor_name=factor_name,
-            side=side,
-            percentile=percentile,
-            window=window,
-            direction=direction,
-        )
-    )
-
-
 __all__ = [
     "BreakoutVolumeEvent",
     "Event",
-    "EventDefinition",
-    "EventFunction",
     "FactorExtremeEvent",
     "MaBreakEvent",
     "VolumeStallEvent",
-    "breakout_volume_event",
     "deduplicate_event_matrix",
-    "factor_extreme_event",
-    "ma_break_event",
     "rolling_percentile",
     "rolling_zscore",
-    "volume_stall_event",
 ]

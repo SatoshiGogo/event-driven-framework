@@ -10,7 +10,7 @@ import pandas as pd
 def forward_return(close: pd.DataFrame, horizon: int) -> pd.DataFrame:
     """Calculate forward close-to-close return for a horizon."""
 
-    return close.shift(-1).pct_change(horizon).shift(-horizon)
+    return close.shift(-horizon).div(close).sub(1.0)
 
 
 def forward_mfe(close: pd.DataFrame, horizon: int) -> pd.DataFrame:

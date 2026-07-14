@@ -119,7 +119,7 @@ def event_specification(event: Event) -> Dict[str, Any]:
         "direction": event.direction,
         "cooldown_days": event.cooldown_days,
         "required_fields": list(event.required_fields),
-        "required_factors": None if event.required_factors is None else list(event.required_factors),
+        "required_factors": event.factor_requirements(),
     }
 
 
@@ -164,8 +164,7 @@ def event_data_signature(
         for field in sorted(required_fields)
         if field in panel.fields
     }
-    required_factors = event.required_factors
-    factor_names = sorted(factors) if required_factors is None else sorted(set(required_factors))
+    factor_names = sorted(event.factor_requirements())
     factor_signature = {
         name: _frame_signature(factors[name])
         for name in factor_names

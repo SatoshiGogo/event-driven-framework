@@ -127,10 +127,10 @@ events:
 `bootstrap: 2000` 后，临时传入 `--bootstrap 5000` 只覆盖本次运行。`--event-config`
 本身默认指向包内的 `event_config.yaml`，因此正常运行不再需要重复填写整组参数。
 
-内置短名包括 `ma_break`、`volume_stall`、`breakout_volume` 和
-`factor_extreme`。`event_name` 是可选的显式报告标识；它只能包含 ASCII 字母、
-数字、下划线、短横线和点，且所有启用事件的名称必须唯一。`factor_extreme`
-引用的因子仍需通过 `--factor name=database/collection` 加载。
+`events.py` 中直接定义的所有具体 `Event` 子类都会被自动发现，不需要再写工厂函数或
+手工注册表。YAML 既可以写完整类名（如 `BreakoutVolumeEvent`），也可以写自动生成的
+snake_case 短名（如 `breakout_volume`）。`event_name` 是可选的显式报告标识；它只能
+包含 ASCII 字母、数字、下划线、短横线和点，且所有启用事件的名称必须唯一。
 
 也可以从可信 Python 模块加载自定义事件类。类必须继承独立的 `Event` 基类，
 并实现 `compute()`：
@@ -147,6 +147,11 @@ from event_study_framework.data import MarketPanel
 class TurnoverSpikeEvent(Event):
     """Example event supplied by an external trusted module."""
 
+    required_fields = ("close", "volume")
+    required_factors = {
+        "turnover_rate": "FactorDB/turnover_rate",
+    }
+
     def __init__(self, multiple: float = 2.0) -> None:
         """Initialize the turnover-spike threshold."""
 
@@ -160,9 +165,16 @@ class TurnoverSpikeEvent(Event):
     ) -> pd.DataFrame:
         """Return dates whose volume exceeds its rolling average."""
 
-        volume = panel["volume"]
-        return volume > volume.rolling(20, min_periods=20).mean() * self.multiple
+        if factors is None:
+            raise ValueError("turnover_rate is required")
+        turnover = factors["turnover_rate"]
+        return turnover > turnover.rolling(20, min_periods=20).mean() * self.multiple
 ```
+
+这就是新增事件所需的全部 Python 代码：`required_fields` 声明标准行情字段，
+`required_factors` 直接声明“事件内使用的名称 -> Mongo 数据库/集合”。主程序会先解析
+当前 YAML 启用的全部事件，再对行情字段和因子依赖取并集、去重后统一读取。多个事件可
+共享同一因子；若同一个因子名被声明成两个不同数据源，程序会在读库前报错。
 
 若该类位于 `my_events/custom.py`，配置中的类名写为
 `my_events.custom:TurnoverSpikeEvent`。动态导入会执行目标模块代码，因此只应
@@ -243,15 +255,21 @@ event_matrices = {
 
 ## 加入 Mongo 因子
 
-因子格式使用 `name=database/collection`：
+因子数据源只在事件类中声明，不再使用 `--factor`，也不再在 YAML 的 `run` 中重复配置：
 
-```powershell
-& "D:\Anaconda3\envs\py385\python.exe" -m event_study_framework.run_event_research `
-  --codes 300308 300274 `
-  --factor my_factor=SomeFactorDB/some_collection
+```python
+class MyFactorEvent(Event):
+    """Event that consumes two automatically loaded factors."""
+
+    required_fields = ("close",)
+    required_factors = {
+        "quality": "FactorDB/quality_score",
+        "momentum": "FactorDB/momentum_score",
+    }
 ```
 
-框架会对因子做时序分位事件和五组分组统计，用来比较规则事件和连续因子分组的差异。
+`compute()` 中直接使用 `factors["quality"]` 和 `factors["momentum"]`。启用该事件后，
+主程序会自动加载这两个因子；禁用后则不会读取它们。
 
 ## 自定义事件
 

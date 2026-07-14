@@ -7,7 +7,6 @@ run:
   output_dir: event_study_framework/outputs
   horizons: [1, 3, 5, 10, 20]
   label_types: [ret]
-  factors: []
   bootstrap: 2000
   significance_level: 0.05
   control_modes: [same_date, same_date_style]
@@ -53,10 +52,11 @@ events:
       ma_window: 20
 
   - class: factor_extreme
-    enabled: false
-    event_name: my_factor_high_ts_pct_0.80
+    enabled: True
+    event_name: UMR_486_high_ts_pct_0.80
     params:
-      factor_name: my_factor
+      factor_name: Y_alpha_486
+      factor_source: DFJG/Y_alpha_486
       side: high
       percentile: 0.8
       window: 252

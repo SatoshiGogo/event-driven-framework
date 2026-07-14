@@ -6,18 +6,24 @@ import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import yaml
 
 from event_study_framework.data import MarketPanel
 from event_study_framework.event import Event, EventMeta
-from event_study_framework.event_config import EventConfigError, load_events_from_config
+from event_study_framework.event_config import (
+    BUILTIN_EVENT_CLASSES,
+    EventConfigError,
+    load_events_from_config,
+)
 from event_study_framework.events import MaBreakEvent
 from event_study_framework.run_event_research import (
     default_events,
+    load_event_factors,
     parse_args,
+    required_factor_sources,
     required_market_collections,
 )
 from event_study_framework.study import EventMeta as StudyEventMeta
@@ -140,7 +146,7 @@ class ThresholdEvent(Event):
     def test_selected_events_limit_market_data_fields(self) -> None:
         """Built-in events should load only the market fields they actually use."""
 
-        collections = required_market_collections(default_events([]))
+        collections = required_market_collections(default_events())
         self.assertEqual(
             collections,
             ("adj_high", "adj_close", "volume"),
@@ -181,6 +187,93 @@ class ThresholdEvent(Event):
         self.assertEqual(args.horizons, [2, 4])
         self.assertFalse(args.show_progress)
         self.assertTrue(args.use_cache)
+
+    def test_builtin_event_classes_are_discovered_without_factories(self) -> None:
+        """Classes in events.py should receive class-name and snake-case aliases."""
+
+        import event_study_framework.events as event_module
+
+        self.assertIs(BUILTIN_EVENT_CLASSES["MaBreakEvent"], MaBreakEvent)
+        self.assertIs(BUILTIN_EVENT_CLASSES["ma_break"], MaBreakEvent)
+        self.assertFalse(hasattr(event_module, "ma_break_event"))
+        self.assertFalse(hasattr(event_module, "breakout_volume_event"))
+
+    def test_event_factor_dependencies_are_deduplicated_and_loaded(self) -> None:
+        """The main loader should infer shared factor sources from event classes."""
+
+        class FactorEvent(Event):
+            """Small event declaring its own Mongo factor dependency."""
+
+            required_fields = ("close",)
+            required_factors = {"quality": "FactorDB/quality_score"}
+
+            def __init__(self, event_name: str) -> None:
+                """Initialize a uniquely named test event."""
+
+                super().__init__(event_name=event_name)
+
+            def compute(
+                self,
+                panel: MarketPanel,
+                factors: Optional[Dict[str, pd.DataFrame]] = None,
+            ) -> pd.DataFrame:
+                """Return a thresholded factor matrix."""
+
+                if factors is None:
+                    raise ValueError("factors are required")
+                return factors["quality"] > 0
+
+        class FakeSource:
+            """Record factor-loading calls without a Mongo dependency."""
+
+            def __init__(self) -> None:
+                """Initialize an empty call list."""
+
+                self.calls: List[Dict[str, Any]] = []
+
+            def load_factor(self, **kwargs: Any) -> pd.DataFrame:
+                """Return one synthetic factor and retain loader arguments."""
+
+                self.calls.append(kwargs)
+                return pd.DataFrame({"A": [1.0]})
+
+        events = [FactorEvent("factor_one"), FactorEvent("factor_two")]
+        source = FakeSource()
+        factors = load_event_factors(source, events, ["A"], "20200101", "20200131")  # type: ignore[arg-type]
+
+        self.assertEqual(required_factor_sources(events), {"quality": "FactorDB/quality_score"})
+        self.assertEqual(list(factors), ["quality"])
+        self.assertEqual(len(source.calls), 1)
+        self.assertEqual(source.calls[0]["database"], "FactorDB")
+        self.assertEqual(source.calls[0]["collection"], "quality_score")
+
+    def test_conflicting_factor_sources_fail_before_data_loading(self) -> None:
+        """One factor alias must not silently refer to two Mongo collections."""
+
+        class ConflictingEvent(Event):
+            """Event with a configurable conflicting source."""
+
+            def __init__(self, event_name: str, source: str) -> None:
+                """Initialize the event and instance-local dependency mapping."""
+
+                self.required_factors = {"quality": source}
+                super().__init__(event_name=event_name)
+
+            def compute(
+                self,
+                panel: MarketPanel,
+                factors: Optional[Dict[str, pd.DataFrame]] = None,
+            ) -> pd.DataFrame:
+                """Return an empty trigger matrix."""
+
+                return panel["close"].notna() & False
+
+        events = [
+            ConflictingEvent("factor_a", "DB_A/quality"),
+            ConflictingEvent("factor_b", "DB_B/quality"),
+        ]
+        with self.assertRaisesRegex(ValueError, "declared as both"):
+            required_factor_sources(events)
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from event_study_framework.data import MarketPanel, normalize_wind_code
-from event_study_framework.events import deduplicate_event_matrix, ma_break_event
+from event_study_framework.events import MaBreakEvent, deduplicate_event_matrix
 from event_study_framework.labels import forward_mae, forward_mfe, forward_return
 from event_study_framework.report import render_event_report
 from event_study_framework.statistics import (
@@ -228,7 +228,7 @@ class EventFrameworkTest(unittest.TestCase):
         panel = make_panel()
         matrices = event_definitions_to_matrices(
             panel,
-            [ma_break_event(ma_window=5, trend_window=20, trend_return_threshold=0.1)],
+            [MaBreakEvent(ma_window=5, trend_window=20, trend_return_threshold=0.1)],
         )
         self.assertIn("ma5_break_after_trend", matrices)
         self.assertEqual(set(matrices["ma5_break_after_trend"].stack().dropna().unique()).issubset({0, 1, False, True}), True)
